@@ -118,14 +118,12 @@ def send_expandable_to_telegram(configs):
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    # تقسیم هوشمند کانفیگ‌ها به دسته‌هایی که هرگز از سقف تلگرام تجاوز نکنند
     batches = []
     current_batch = []
     current_len = 0
 
     for cfg in configs:
         cfg_len = len(html.escape(cfg)) + 4
-        # سقف امن ۳۰۰۰ کاراکتر برای هر پیام
         if current_batch and (current_len + cfg_len > 3000):
             batches.append(current_batch)
             current_batch = [cfg]
@@ -144,9 +142,11 @@ def send_expandable_to_telegram(configs):
 
         message_text = (
             f"🔰 <b>پکیج کانفیگ‌های اختصاصی همراه اول{part_tag}</b>\n"
+            "👉🆔 <b>@Goodbaye_filtering</b>\n"
             "👇 <i>برای مشاهده و کپی یکجای کانفیگ‌ها روی کادر زیر ضربه بزنید:</i>\n\n"
             f"<blockquote expandable><code>{safe_text}</code></blockquote>\n\n"
-            "#همراه_اول"
+            "#همراه_اول\n"
+            "👉🆔 @Goodbaye_filtering"
         )
 
         data = {
