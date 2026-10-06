@@ -2,42 +2,46 @@ import base64
 import json
 import os
 import re
+import socket
+import time
 import urllib.parse
 from datetime import datetime
 import requests
 
-# تنظیمات و توکن‌ها از محیط گیت‌هاب
+# خواندن متغیرهای محرمانه از گیت‌هاب
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# منابع کانال‌های تلگرام برای استخراج
-TELEGRAM_CHANNELS = [
-    "v2rayng_org",
-    "v2ray_outlineir",
-    "PrivateVPNOfficial",
-    "ConfigsHUB",
-    "customv2ray",
+# منابع فعال و به‌روز کانفیگ‌ها
+GITHUB_SOURCES = [
+    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub2.txt",
+    "https://raw.githubusercontent.com/LalatinaHub/Mineral/master/result/nodes",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/reality",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/vless",
 ]
 
-# منابع خام گیتهاب
-GITHUB_SOURCES = [
-    "https://raw.githubusercontent.com/yebekhe/TVC/main/subscriptions/xray/normal/mix",
-    "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt",
+TELEGRAM_CHANNELS = [
+    "v2rayNG_VPNofficial",
+    "v2ray_configs_pool",
+    "PrivateVPNOfficial",
+    "Outline_Vpn",
 ]
 
 CONFIG_REGEX = re.compile(r"(?:vmess|vless|trojan|ss)://[^\s<>'\"]+")
 
-# دیکشنری کد کشور به ایموجی پرچم
 def get_flag(country_code: str) -> str:
     if not country_code or len(country_code) != 2:
         return "🌐"
     return "".join(chr(127397 + ord(c)) for c in country_code.upper())
 
 def get_ip_info(host: str):
-    """استخراج پرچم، کشور و شهر با استفاده از IP-API"""
+    """استخراج پرچم، کشور و شهر سرور"""
     try:
-        # اگر هاست دامنه باشد یا IP
-        res = requests.get(f"http://ip-api.com/json/{host}?fields=status,country,countryCode,city", timeout=3).json()
+        res = requests.get(
+            f"http://ip-api.com/json/{host}?fields=status,country,countryCode,city",
+            timeout=2
+        ).json()
         if res.get("status") == "success":
             flag = get_flag(res.get("countryCode", ""))
             return flag, res.get("country", "Unknown"), res.get("city", "Unknown")
@@ -46,7 +50,7 @@ def get_ip_info(host: str):
     return "🌐", "Global", "Edge"
 
 def detect_capability(config: str) -> str:
-    """تشخیص قابلیت واقعی کانفیگ"""
+    """تشخیص نوع قابلیت کانفیگ"""
     low = config.lower()
     if "reality" in low:
         return "Reality"
@@ -58,18 +62,45 @@ def detect_capability(config: str) -> str:
         return "TCP"
     return "Direct"
 
-def format_vmess(config_str: str) -> str:
+def parse_host_port(config_str: str):
+    """استخراج آدرس و پورت سرور جهت تست اتصال واقعی"""
+    try:
+        if config_str.startswith("vmess://"):
+            b64_part = config_str.replace("vmess://", "")
+            padded = b64_part + "=" * (-len(b64_part) % 4)
+            data = json.loads(base64.b64decode(padded).decode("utf-8", errors="ignore"))
+            return data.get("add", ""), int(data.get("port", 443))
+        else:
+            parsed = urllib.parse.urlparse(config_str)
+            return parsed.hostname, int(parsed.port or 443)
+    except Exception:
+        return None, None
+
+def test_real_ping(host: str, port: int) -> int:
+    """تست واقعی باز بودن پورت و محاسبه پینگ بر حسب میلی‌ثانیه"""
+    if not host or not port:
+        return -1
+    try:
+        start_time = time.time()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1.5)  # اگر در ۱.۵ ثانیه پاسخ ندهد سرور مرده است
+        sock.connect((host, port))
+        sock.close()
+        latency = int((time.time() - start_time) * 1000)
+        return latency
+    except Exception:
+        return -1
+
+def format_vmess(config_str: str, ping_val: int) -> str:
     """قالب‌بندی کانفیگ VMess طبق الگوی پین‌شده"""
     try:
         b64_part = config_str.replace("vmess://", "")
-        # اصلاح پدینگ base64
         padded = b64_part + "=" * (-len(b64_part) % 4)
         data = json.loads(base64.b64decode(padded).decode("utf-8", errors="ignore"))
         
         host = data.get("add", "")
         flag, country, city = get_ip_info(host)
         cap = detect_capability(config_str)
-        ping_val = "120" # برآورد تاخیر پایدار
 
         remark = f"👉🆔@Goodbaye_filtering 📡{flag} {country} ®️{city} 🅿️ping:{ping_val}ms ⚡{cap}"
         data["ps"] = remark
@@ -77,73 +108,83 @@ def format_vmess(config_str: str) -> str:
         new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
         return f"vmess://{new_b64}"
     except Exception:
-        return config_str
+        return None
 
-def format_uri(config_str: str) -> str:
+def format_uri(config_str: str, ping_val: int) -> str:
     """قالب‌بندی کانفیگ‌های VLESS, Trojan, SS طبق الگوی پین‌شده"""
     try:
-        # استخراج آدرس سرور
         parsed = urllib.parse.urlparse(config_str)
         host = parsed.hostname or "1.1.1.1"
         flag, country, city = get_ip_info(host)
         cap = detect_capability(config_str)
-        ping_val = "115"
 
         remark = f"👉🆔@Goodbaye_filtering 📡{flag} {country} ®️{city} 🅿️ping:{ping_val}ms ⚡{cap}"
         clean_url = config_str.split("#")[0]
         return f"{clean_url}#{urllib.parse.quote(remark)}"
     except Exception:
-        return config_str
+        return None
 
-def fetch_mci_configs():
-    all_raw = []
+def collect_and_verify():
+    """جمع‌آوری و پالایش بر اساس تست واقعی پینگ"""
+    raw_configs = []
 
-    # ۱. استخراج از پیش‌نمایش وب تلگرام
-    for ch in TELEGRAM_CHANNELS:
-        try:
-            url = f"https://t.me/s/{ch}"
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                # استخراج پیام‌ها
-                matches = CONFIG_REGEX.findall(resp.text)
-                for cfg in matches:
-                    # فیلتر کردن موارد همراه اول یا تگ‌های مرتبط
-                    low = (cfg + resp.text).lower()
-                    if "mci" in low or "همراه اول" in low or "hamrah" in low:
-                        all_raw.append(cfg)
-        except Exception as e:
-            print(f"Error reading telegram {ch}: {e}")
-
-    # ۲. استخراج از گیت‌هاب
+    # ۱. استخراج از سورس‌های گیت‌هاب
     for g_url in GITHUB_SOURCES:
         try:
-            resp = requests.get(g_url, timeout=10)
-            if resp.status_code == 200:
-                matches = CONFIG_REGEX.findall(resp.text)
-                for cfg in matches:
-                    if "mci" in cfg.lower() or "همراه" in cfg.lower():
-                        all_raw.append(cfg)
-        except Exception as e:
-            print(f"Error reading github {g_url}: {e}")
+            r = requests.get(g_url, timeout=6)
+            if r.status_code == 200:
+                text = r.text
+                if not text.startswith("vless://") and not text.startswith("vmess://"):
+                    try:
+                        text = base64.b64decode(text).decode("utf-8", errors="ignore")
+                    except Exception:
+                        pass
+                raw_configs.extend(CONFIG_REGEX.findall(text))
+        except Exception:
+            pass
 
-    # حذف تکراری‌ها
-    unique_raw = list(dict.fromkeys(all_raw))
-    print(f"Total raw MCI configs found: {len(unique_raw)}")
+    # ۲. استخراج از کانال‌های تلگرام
+    for ch in TELEGRAM_CHANNELS:
+        try:
+            r = requests.get(f"https://t.me/s/{ch}", timeout=6)
+            if r.status_code == 200:
+                raw_configs.extend(CONFIG_REGEX.findall(r.text))
+        except Exception:
+            pass
 
-    # اعمال فرمت ثابت و سنجاق‌شده
-    final_configs = []
-    for cfg in unique_raw[:100]: # انتخاب ۱۰۰ مورد برتر
-        if cfg.startswith("vmess://"):
-            final_configs.append(format_vmess(cfg))
-        else:
-            final_configs.append(format_uri(cfg))
+    unique_candidates = list(dict.fromkeys(raw_configs))
+    print(f"Total candidate configs collected: {len(unique_candidates)}")
 
-    return final_configs
+    alive_configs = []
+
+    # ۳. فیلتر کردن کانفیگ‌های خاموش و ثبت پینگ واقعی
+    for cfg in unique_candidates:
+        host, port = parse_host_port(cfg)
+        if not host or not port:
+            continue
+
+        latency = test_real_ping(host, port)
+        if latency > 0:  # فقط سرورهایی که اتصال واقعی دادند
+            if cfg.startswith("vmess://"):
+                formatted = format_vmess(cfg, latency)
+            else:
+                formatted = format_uri(cfg, latency)
+
+            if formatted:
+                alive_configs.append((latency, formatted))
+
+            # جمع‌آوری تا سقف ۵۰ کانفیگ فعال و سالم
+            if len(alive_configs) >= 50:
+                break
+
+    # سورت بر اساس بهترین پینگ (کمترین تاخیر)
+    alive_configs.sort(key=lambda x: x[0])
+    return [c[1] for c in alive_configs]
 
 def send_to_telegram(file_path: str, count: int):
-    """ارسال فایل با کپشن و ۳ دکمه شیشه‌ای مصوب"""
+    """ارسال به تلگرام با کپشن و دکمه‌های شیشه‌ای پین‌شده"""
     if not BOT_TOKEN or not CHAT_ID:
-        print("Telegram Credentials not set.")
+        print("Telegram Credentials not found.")
         return
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -152,14 +193,14 @@ def send_to_telegram(file_path: str, count: int):
         "🔰 پکیج اختصاصی کانفیگ‌های همراه‌اول (MCI)\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         "📊 مشخصات و آمار فایل:\n"
-        f"🔹 تعداد کل کانفیگ‌ها: {count} عدد\n"
-        "🔹 پروتکل‌ها: VLESS | VMess | Trojan | Hysteria2\n"
-        "🔹 وضعیت سلامت: تست‌شده و پایدار روی همراه اول\n"
+        f"🔹 تعداد کل کانفیگ‌ها: {count} عدد (تست‌شده و زنده)\n"
+        "🔹 پروتکل‌ها: VLESS | VMess | Trojan | Reality\n"
+        "🔹 وضعیت سلامت: تست سوکت واقعی و پینگ تاییدشده\n"
         "🔹 برچسب اختصاصی: @Goodbaye_filtering\n"
         f"🔹 زمان به‌روزرسانی: {now_str}\n\n"
         "⚡️ ویژگی‌ها:\n"
         "✔️ دارای تفکیک پرچم و نام کشورها\n"
-        "✔️ نمایش پینگ لحظه‌ای در عنوان هر سرور\n"
+        "✔️ پینگ واقعی محاسبه‌شده بر حسب میلی‌ثانیه\n"
         "✔️ حاوی فناوری Reality و هسته‌های نوین\n\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         "📱 قابل استفاده در کلاینت‌های:\n"
@@ -167,7 +208,6 @@ def send_to_telegram(file_path: str, count: int):
         "👉🆔 @Goodbaye_filtering"
     )
 
-    # چیدمان ۳ دکمه شیشه‌ای سنجاق‌شده
     reply_markup = {
         "inline_keyboard": [
             [
@@ -192,13 +232,13 @@ def send_to_telegram(file_path: str, count: int):
             "reply_markup": json.dumps(reply_markup)
         }
         res = requests.post(url, data=data, files=files, timeout=30)
-        print("Telegram response:", res.status_code, res.text)
+        print("Telegram response status:", res.status_code)
 
 def main():
-    configs = fetch_mci_configs()
+    configs = collect_and_verify()
     if not configs:
-        print("No configs found, creating fallback placeholder.")
-        configs = ["vless://dummy-uuid@1.1.1.1:443?security=reality#👉🆔@Goodbaye_filtering 📡🌐 Global ®️Edge 🅿️ping:110ms ⚡Reality"]
+        print("No alive configs found right now.")
+        return
 
     file_name = "MCI_Configs.txt"
     with open(file_name, "w", encoding="utf-8") as f:
