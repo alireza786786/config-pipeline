@@ -1,14 +1,17 @@
-name: MCI Direct Publisher
+name: Max Pipeline (Repo Only)
 
 on:
   schedule:
-    # اجرای کاملاً خودکار در رأس هر یک ساعت
-    - cron: '0 * * * *'
-  workflow_dispatch: # همچنان امکان اجرای دستی با دکمه را برای شما نگه می‌دارد
+    # اجرا هر ۲ ساعت یک‌بار به‌صورت خودکار
+    - cron: '0 */2 * * *'
+  workflow_dispatch: # امکان اجرای دستی با دکمه
 
 jobs:
-  publish:
+  build-and-deploy:
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Repository
@@ -23,10 +26,15 @@ jobs:
         run: |
           pip install requests
 
-      - name: Run Direct Publisher
+      - name: Run Max Pipeline
         env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-          SOURCE_MCI: ${{ secrets.SOURCE_MCI }}
+          SOURCE_Max: ${{ secrets.SOURCE_Max }}
         run: |
-          python main.py
+          python pipeline_max.py
+
+      - name: Commit and Push Verified Configs to Repository
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add configs_*.txt
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update verified configs from SOURCE_Max [skip ci]" && git push)
