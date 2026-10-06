@@ -1,4 +1,5 @@
 import base64
+import html
 import json
 import os
 import re
@@ -78,7 +79,6 @@ def fetch_source_configs():
         return []
 
     content = ""
-    # بررسی لینک بودن یا متن مستقیم
     if SOURCE_MCI.startswith("http://") or SOURCE_MCI.startswith("https://"):
         try:
             r = requests.get(SOURCE_MCI.strip(), timeout=15)
@@ -90,7 +90,6 @@ def fetch_source_configs():
     else:
         content = SOURCE_MCI
 
-    # اگر محتوا با Base64 کد شده باشد بازگشایی شود
     if not content.startswith("vless://") and not content.startswith("vmess://"):
         try:
             decoded = base64.b64decode(content).decode("utf-8", errors="ignore")
@@ -112,33 +111,39 @@ def fetch_source_configs():
 
     return formatted_list
 
-def send_text_chunks_to_telegram(configs):
+def send_expandable_to_telegram(configs):
     if not BOT_TOKEN or not CHAT_ID or not configs:
         return
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    # دسته‌بندی کانفیگ‌ها در پارت‌های متنی مناسب (حداکثر ۱۰ کانفیگ در هر پیام جهت کپی آسان)
-    chunk_size = 8
-    for i in range(0, len(configs), chunk_size):
-        part = configs[i:i + chunk_size]
-        text_body = "\n\n".join(part)
-        message_text = f"{text_body}\n\n#همراه_اول"
+    # اتصال کانفیگ‌ها و ایمن‌سازی کاراکترهای وب (& و < و >)
+    raw_joined = "\n\n".join(configs)
+    safe_text = html.escape(raw_joined)
 
-        data = {
-            "chat_id": CHAT_ID,
-            "text": message_text,
-            "disable_web_page_preview": True
-        }
-        res = requests.post(url, data=data, timeout=20)
-        print("Telegram send status:", res.status_code)
+    # قالب تاشو با فلش و کپی با یک لمس
+    message_text = (
+        "🔰 <b>پکیج کانفیگ‌های اختصاصی همراه اول</b>\n"
+        "👇 <i>برای مشاهده و کپی یکجای کانفیگ‌ها روی کادر زیر ضربه بزنید:</i>\n\n"
+        f"<blockquote expandable><code>{safe_text}</code></blockquote>\n\n"
+        "#همراه_اول"
+    )
+
+    data = {
+        "chat_id": CHAT_ID,
+        "text": message_text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+    res = requests.post(url, data=data, timeout=25)
+    print("Telegram send status:", res.status_code, res.text)
 
 def main():
     configs = fetch_source_configs()
     if configs:
-        send_text_chunks_to_telegram(configs)
+        send_expandable_to_telegram(configs)
     else:
-        print("No configs to send.")
+        print("No configs found.")
 
 if __name__ == "__main__":
     main()
