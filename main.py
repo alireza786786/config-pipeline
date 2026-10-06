@@ -3,6 +3,7 @@ import html
 import json
 import os
 import re
+import time
 import urllib.parse
 import requests
 
@@ -117,26 +118,46 @@ def send_expandable_to_telegram(configs):
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    # اتصال کانفیگ‌ها و ایمن‌سازی کاراکترهای وب (& و < و >)
-    raw_joined = "\n\n".join(configs)
-    safe_text = html.escape(raw_joined)
+    # تقسیم هوشمند کانفیگ‌ها به دسته‌هایی که هرگز از سقف تلگرام تجاوز نکنند
+    batches = []
+    current_batch = []
+    current_len = 0
 
-    # قالب تاشو با فلش و کپی با یک لمس
-    message_text = (
-        "🔰 <b>پکیج کانفیگ‌های اختصاصی همراه اول</b>\n"
-        "👇 <i>برای مشاهده و کپی یکجای کانفیگ‌ها روی کادر زیر ضربه بزنید:</i>\n\n"
-        f"<blockquote expandable><code>{safe_text}</code></blockquote>\n\n"
-        "#همراه_اول"
-    )
+    for cfg in configs:
+        cfg_len = len(html.escape(cfg)) + 4
+        # سقف امن ۳۰۰۰ کاراکتر برای هر پیام
+        if current_batch and (current_len + cfg_len > 3000):
+            batches.append(current_batch)
+            current_batch = [cfg]
+            current_len = cfg_len
+        else:
+            current_batch.append(cfg)
+            current_len += cfg_len
 
-    data = {
-        "chat_id": CHAT_ID,
-        "text": message_text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
-    res = requests.post(url, data=data, timeout=25)
-    print("Telegram send status:", res.status_code, res.text)
+    if current_batch:
+        batches.append(current_batch)
+
+    total_parts = len(batches)
+    for idx, batch in enumerate(batches, 1):
+        safe_text = html.escape("\n\n".join(batch))
+        part_tag = f" (بخش {idx} از {total_parts})" if total_parts > 1 else ""
+
+        message_text = (
+            f"🔰 <b>پکیج کانفیگ‌های اختصاصی همراه اول{part_tag}</b>\n"
+            "👇 <i>برای مشاهده و کپی یکجای کانفیگ‌ها روی کادر زیر ضربه بزنید:</i>\n\n"
+            f"<blockquote expandable><code>{safe_text}</code></blockquote>\n\n"
+            "#همراه_اول"
+        )
+
+        data = {
+            "chat_id": CHAT_ID,
+            "text": message_text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
+        }
+        res = requests.post(url, data=data, timeout=25)
+        print(f"Telegram send status part {idx}:", res.status_code, res.text)
+        time.sleep(1)
 
 def main():
     configs = fetch_source_configs()
