@@ -13,7 +13,6 @@ SOURCE_MCI = os.getenv("SOURCE_MCI")
 
 CONFIG_REGEX = re.compile(r"(?:vmess|vless|trojan|ss)://[^\s<>'\"]+")
 
-# دیکشنری هوشمند برای شناسایی کشورها از متن اولیه و تبدیل به فارسی
 COUNTRY_MAP = {
     "de": ("🇩🇪", "آلمان", "فرانکفورت"),
     "germany": ("🇩🇪", "آلمان", "فرانکفورت"),
@@ -28,8 +27,7 @@ COUNTRY_MAP = {
     "uk": ("🇬🇧", "انگلیس", "لندن"),
     "united kingdom": ("🇬🇧", "انگلیس", "لندن"),
     "انگلیس": ("🇬🇧", "انگلیس", "لندن"),
-    "bریتانیا": ("🇬🇧", "انگلیس", "لندن"),
-    "us": ("🇺🇸", "آمریکا", "واشنگتن"),
+    "us": ("🇺🇸", "آمریکا", "نیویورک"),
     "usa": ("🇺🇸", "آمریکا", "نیویورک"),
     "united states": ("🇺🇸", "آمریکا", "نیویورک"),
     "آمریکا": ("🇺🇸", "آمریکا", "نیویورک"),
@@ -59,7 +57,6 @@ COUNTRY_MAP = {
     "امارات": ("🇦🇪", "امارات", "دبی"),
 }
 
-# ایموجی پرچم‌های دنیا
 FLAGS = {
     "🇩🇪": ("🇩🇪", "آلمان", "فرانکفورت"),
     "🇳🇱": ("🇳🇱", "هلند", "آمستردام"),
@@ -76,14 +73,11 @@ FLAGS = {
 }
 
 def extract_geo_from_text(text: str):
-    """جستجوی پرچم یا نام کشور در عنوان اولیه کانفیگ"""
     if not text:
         return None
-    # ۱. جستجوی مستقیم پرچم‌های ایموجی
     for flag_emoji, info in FLAGS.items():
         if flag_emoji in text:
             return info
-    # ۲. جستجوی کلمات کلیدی کشورها
     low = text.lower()
     for key, info in COUNTRY_MAP.items():
         if re.search(r'\b' + re.escape(key) + r'\b', low) or key in low:
@@ -91,7 +85,6 @@ def extract_geo_from_text(text: str):
     return None
 
 def get_ip_info(host: str):
-    """استعلام اینترنتی در صورت مشخص نبودن در عنوان"""
     try:
         res = requests.get(
             f"http://ip-api.com/json/{host}?fields=status,country,countryCode,city",
@@ -101,7 +94,6 @@ def get_ip_info(host: str):
             code = res.get("countryCode", "").lower()
             if code in COUNTRY_MAP:
                 return COUNTRY_MAP[code]
-            # در صورتی که کشور دیگری بود
             flag = "".join(chr(127397 + ord(c)) for c in code.upper())
             return flag, res.get("country", "ناشناس"), res.get("city", "مرکزی")
     except Exception:
@@ -119,6 +111,21 @@ def detect_capability(config: str) -> str:
     if "tcp" in low:
         return "TCP"
     return "Direct"
+
+def get_config_fingerprint(cfg: str) -> str:
+    """استخراج شناسه هویتی سرور جهت شناسایی و حذف ۱۰۰٪ تکراری‌ها"""
+    try:
+        if cfg.startswith("vmess://"):
+            b64_part = cfg.replace("vmess://", "")
+            padded = b64_part + "=" * (-len(b64_part) % 4)
+            data = json.loads(base64.b64decode(padded).decode("utf-8", errors="ignore"))
+            # سرور، پورت، آی‌دی و مسیر سرور شناسه یکتا هستند
+            return f"vmess:{data.get('add')}:{data.get('port')}:{data.get('id')}:{data.get('path', '')}"
+        else:
+            # حذف کامل نام بعد از # برای مقایسه آدرس و پورت اصلی
+            return cfg.split("#")[0].strip()
+    except Exception:
+        return cfg
 
 def format_vmess(config_str: str) -> str:
     try:
@@ -145,7 +152,6 @@ def format_vmess(config_str: str) -> str:
 
 def format_uri(config_str: str) -> str:
     try:
-        # بررسی نام اولیه بعد از علامت #
         orig_remark = ""
         if "#" in config_str:
             orig_remark = urllib.parse.unquote(config_str.split("#", 1)[1])
@@ -189,7 +195,17 @@ def fetch_source_configs():
             pass
 
     found = CONFIG_REGEX.findall(content)
-    unique_cfgs = list(dict.fromkeys(found))
+
+    # فیلتر هوشمند تکراری‌ها بر اساس اثرانگشت سرور
+    seen_fingerprints = set()
+    unique_cfgs = []
+    for cfg in found:
+        fp = get_config_fingerprint(cfg)
+        if fp not in seen_fingerprints:
+            seen_fingerprints.add(fp)
+            unique_cfgs.append(cfg)
+
+    print(f"Total Unique Server Configs: {len(unique_cfgs)}")
 
     formatted_list = []
     for cfg in unique_cfgs:
